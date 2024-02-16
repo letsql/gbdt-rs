@@ -12,9 +12,10 @@ params = {
     'nthread': 1,
 }
 
+
 def train():
     data = np.loadtxt('./dermatology.data.train', delimiter=',',
-        converters={33: lambda x:int(x == '?'), 34: lambda x:int(x) - 1})
+                      converters={33: lambda x: int(x == '?'), 34: lambda x: int(x) - 1})
     train_X = data[:, :33]
     train_Y = data[:, 34]
 
@@ -23,21 +24,22 @@ def train():
     print("Training started.")
     t0 = time.time()
     model = xgb.train(plst, xgb_train, num_boost_round=50,
-    )
+                      )
     print("%.3fs taken for training" % (time.time() - t0))
     print("Saving model...")
-    model.save_model("xgb.model")
+    model.save_model("xgb.json")
+
 
 def predict():
     t0 = time.time()
     model = xgb.Booster()
-    model.load_model("xgb.model")
+    model.load_model("xgb.json")
     t1 = time.time()
     print("%.3fs taken for load_model" % (t1 - t0))
 
     t0 = time.time()
     data = np.loadtxt('./dermatology.data.test', delimiter=',',
-        converters={33: lambda x:int(x == '?'), 34: lambda x:int(x) - 1})
+                      converters={33: lambda x: int(x == '?'), 34: lambda x: int(x) - 1})
     test_X = data[:, :33]
     test_Y = data[:, 34]
 

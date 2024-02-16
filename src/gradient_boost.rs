@@ -81,35 +81,32 @@
 //! // [1.0, 1.0, 2.0, 0.0]
 //! ```
 
+#[cfg(not(feature = "mesalock_sgx"))]
+use std::fs::File;
+use std::io::BufReader;
+use std::io::prelude::*;
 #[cfg(all(feature = "mesalock_sgx", not(target_env = "sgx")))]
 use std::prelude::v1::*;
+#[cfg(feature = "profiling")]
+use std::time::Instant;
+#[cfg(feature = "mesalock_sgx")]
+use std::untrusted::fs::File;
 
-use crate::config::{Config, Loss};
-use crate::decision_tree::DecisionTree;
-#[cfg(feature = "enable_training")]
-use crate::decision_tree::TrainingCache;
-use crate::decision_tree::{DataVec, PredVec, ValueType, VALUE_TYPE_MIN, VALUE_TYPE_UNKNOWN};
-use crate::errors::Result;
-#[cfg(feature = "enable_training")]
-use crate::fitness::{label_average, logit_loss_gradient, weighted_label_median, AUC, MAE, RMSE};
 #[cfg(feature = "enable_training")]
 use rand::prelude::SliceRandom;
 #[cfg(feature = "enable_training")]
 use rand::thread_rng;
-
-#[cfg(not(feature = "mesalock_sgx"))]
-use std::fs::File;
-
-#[cfg(feature = "mesalock_sgx")]
-use std::untrusted::fs::File;
-
-use std::io::prelude::*;
-use std::io::BufReader;
-
 use serde_derive::{Deserialize, Serialize};
+use serde_json::Value;
 
-#[cfg(feature = "profiling")]
-use std::time::Instant;
+use crate::config::{Config, Loss};
+use crate::decision_tree::{DataVec, PredVec, VALUE_TYPE_MIN, VALUE_TYPE_UNKNOWN, ValueType};
+use crate::decision_tree::DecisionTree;
+#[cfg(feature = "enable_training")]
+use crate::decision_tree::TrainingCache;
+use crate::errors::Result;
+#[cfg(feature = "enable_training")]
+use crate::fitness::{AUC, label_average, logit_loss_gradient, MAE, RMSE, weighted_label_median};
 
 /// The gradient boosting decision tree.
 #[derive(Default, Serialize, Deserialize)]
@@ -752,6 +749,23 @@ impl GBDT {
         Self::from_xgboost_reader(reader, objective)
     }
 
+     /// Load the model from xgboost's json model using a path.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use gbdt::gradient_boost::GBDT;
+    /// let gbdt =
+    ///     GBDT::from_xgboost_json("xgb-data/xgb_binary_logistic/xgb.json").unwrap();
+    /// ```
+    ///
+    /// # Error
+    /// Error when get exception during model file parsing.
+    pub fn from_xgboost_json(model_file_path: &str) -> Result<Self> {
+        let tree_file = File::open(model_file_path)?;
+        Self::from_xgboost_json_reader(tree_file)
+    }
+
     /// Load the model from xgboost's model using a reader. The xgboost's model should be converted by "convert_xgboost.py"
     ///
     /// # Example
@@ -799,6 +813,36 @@ impl GBDT {
             let tree = DecisionTree::get_from_xgboost(node)?;
             gbdt.trees.push(tree);
         }
+        Ok(gbdt)
+    }
+
+    fn from_xgboost_json_reader(mut file: File) -> Result<Self> {
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+        let data: Value = serde_json::from_str(&contents)?;
+        let objective = data["learner"]["objective"]["name"].as_str().unwrap();
+        let base_score = data["learner"]["learner_model_param"]["base_score"]
+            .as_str()
+            .unwrap()
+            .parse::<f64>()
+            .unwrap();
+
+        let trees = data["learner"]["gradient_booster"]["model"]["trees"]
+            .as_array()
+            .unwrap();
+
+        let mut cfg = Config::new();
+        cfg.set_loss(objective);
+        cfg.set_iterations(trees.len());
+        cfg.shrinkage = 1.0;
+        let mut gbdt = GBDT::new(&cfg);
+        gbdt.bias = base_score;
+
+        for tree in trees.iter() {
+            let tree = DecisionTree::get_from_xgboost_json(tree)?;
+            gbdt.trees.push(tree);
+        }
+
         Ok(gbdt)
     }
 }

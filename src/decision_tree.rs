@@ -92,8 +92,16 @@
 //! // [2.0, 0.75, 0.75, 3.0]
 //! ```
 
+use std::convert::TryInto;
 #[cfg(all(feature = "mesalock_sgx", not(target_env = "sgx")))]
 use std::prelude::v1::*;
+
+#[cfg(feature = "enable_training")]
+use rand::prelude::SliceRandom;
+#[cfg(feature = "enable_training")]
+use rand::thread_rng;
+use serde_derive::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::binary_tree::BinaryTree;
 use crate::binary_tree::BinaryTreeNode;
@@ -102,13 +110,6 @@ use crate::config::Loss;
 use crate::errors::{GbdtError, Result};
 #[cfg(feature = "enable_training")]
 use crate::fitness::almost_equal;
-
-#[cfg(feature = "enable_training")]
-use rand::prelude::SliceRandom;
-#[cfg(feature = "enable_training")]
-use rand::thread_rng;
-
-use serde_derive::{Deserialize, Serialize};
 
 /// For now we only support std::$t using this macro.
 /// We will generalize ValueType in future.
@@ -122,7 +123,7 @@ macro_rules! def_value_type {
 }
 
 // use continous variables for decision tree
-def_value_type!(f32);
+def_value_type!(f64);
 
 /// A training sample or a test sample. You can call `new_training_data` to generate a training sample, and call `new_test_data` to generate a test sample.
 ///
@@ -276,7 +277,8 @@ pub struct TrainingCache {
     /// (uisze, ValueType) is the smaple's index in the training set and its residual value.
     ordered_residual: Vec<(usize, ValueType)>,
     /// cache_value[i] is the (i+1)th sample's `CacheValue`
-    cache_value: Vec<CacheValue>, //s, ss, c
+    cache_value: Vec<CacheValue>,
+    //s, ss, c
     /// cache_target[i] is the (i+1)th sample's `target` value (not the label). Organizing the `target` and `CacheValue` together will have better spatial locality.
     cache_target: Vec<ValueType>,
     /// loigt_c[i] is the (i+1)th sample's logit value. let y = target.abs(); let logit_value = y * (2.0 - y) * weight;
@@ -612,6 +614,7 @@ struct SubCache {
     /// True means the SubCache is not computed. For the root node, the samples in current node are the whole training set. So SubCache is not needed.
     lazy: bool,
 }
+
 #[cfg(feature = "enable_training")]
 impl SubCache {
     /// Generate the SubCache frome the TrainingCache. `data` is the whole training set. `loss` is the loss type.
@@ -922,6 +925,15 @@ impl DTNode {
             is_leaf: false,
         }
     }
+}
+
+struct XGBDecisionTree {
+    split_conditions: Vec<f64>,
+    split_indices: Vec<i64>,
+    right_children: Vec<i64>,
+    left_children: Vec<i64>,
+    default_left: Vec<i64>,
+    base_weights: Vec<f64>,
 }
 
 /// The decision tree.
@@ -1754,8 +1766,56 @@ impl DecisionTree {
         Ok(tree)
     }
 
+    pub fn get_from_xgboost_json(json_tree: &Value) -> Result<Self> {
+        let mut tree = DecisionTree::new();
+        let index = tree.tree.add_root(BinaryTreeNode::new(DTNode::new()));
+
+        let xgb_dt = XGBDecisionTree {
+            split_conditions: json_tree["split_conditions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap())
+                .collect(),
+            split_indices: json_tree["split_indices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap())
+                .collect(),
+            right_children: json_tree["right_children"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap())
+                .collect(),
+            left_children: json_tree["left_children"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap())
+                .collect(),
+            default_left: json_tree["default_left"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap())
+                .collect(),
+            base_weights: json_tree["base_weights"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap())
+                .collect(),
+        };
+
+        tree.add_node_from_xgboost_json(index, &xgb_dt, 0)?;
+        Ok(tree)
+    }
+
+
     /// Recursively build the tree node from the JSON value.
-    fn add_node_from_json(&mut self, index: TreeIndex, node: &serde_json::Value) -> Result<()> {
+    fn add_node_from_json(&mut self, index: TreeIndex, node: &Value) -> Result<()> {
         {
             let node_ref = self
                 .tree
@@ -1778,21 +1838,17 @@ impl DecisionTree {
                 let feature_index = match node["split"].as_i64() {
                     Some(v) => v,
                     None => {
-                        let feature_name = node["split"]
-                            .as_str()
-                            .ok_or("parse 'split' error")?;
+                        let feature_name = node["split"].as_str().ok_or("parse 'split' error")?;
                         let digits = feature_name
-                        .rsplit_once(|c: char| !c.is_ascii_digit())
-                        .map_or(feature_name, |(_head, digits)| digits);
+                            .rsplit_once(|c: char| !c.is_ascii_digit())
+                            .map_or(feature_name, |(_head, digits)| digits);
                         digits.parse::<i64>()?
                     }
                 };
                 node_ref.value.feature_index = feature_index as usize;
 
                 // handle unknown feature
-                let missing = node["missing"]
-                    .as_i64()
-                    .ok_or("parse 'missing' error")?;
+                let missing = node["missing"].as_i64().ok_or("parse 'missing' error")?;
                 let left_child = node["yes"].as_i64().ok_or("parse 'yes' error")?;
                 let right_child = node["no"].as_i64().ok_or("parse 'no' error")?;
                 if missing == left_child {
@@ -1814,9 +1870,7 @@ impl DecisionTree {
         let mut find_left = false;
         let mut find_right = false;
         for child in children.iter() {
-            let node_id = child["nodeid"]
-                .as_i64()
-                .ok_or("parse 'nodeid' error")?;
+            let node_id = child["nodeid"].as_i64().ok_or("parse 'nodeid' error")?;
 
             // build left child
             if node_id == left_child {
@@ -1840,6 +1894,59 @@ impl DecisionTree {
         if (!find_left) || (!find_right) {
             return Err(GbdtError::ChildrenNotFound);
         }
+        Ok(())
+    }
+
+    fn add_node_from_xgboost_json(
+        &mut self,
+        index: TreeIndex,
+        tree_data: &XGBDecisionTree,
+        i: i64,
+    ) -> Result<()> {
+        let idx : usize = i.try_into().unwrap();
+        let split_condition = tree_data.split_conditions[idx];
+        let split_index = tree_data.split_indices[idx];
+        let default_left = tree_data.default_left[idx];
+        let _base_weight = tree_data.base_weights[idx];
+
+        let node_ref = self
+            .tree
+            .get_node_mut(index)
+            .expect("node should not be empty!");
+
+        if tree_data.right_children[idx] == -1 && tree_data.left_children[idx] == -1 {
+            node_ref.value.pred = split_condition as ValueType;
+            node_ref.value.is_leaf = true;
+            return Ok(());
+        }
+
+        // feature value
+        node_ref.value.feature_value = split_condition as ValueType;
+
+        // feature index
+        node_ref.value.feature_index = split_index as usize;
+
+        // handle unknown feature
+        node_ref.value.missing = if default_left != 0 { -1 } else { 1 };
+
+        // build left child
+        let left_index = self
+            .tree
+            .add_left_node(index, BinaryTreeNode::new(DTNode::new()));
+        let left_children_index = tree_data.left_children[idx];
+        self.add_node_from_xgboost_json(left_index, tree_data, left_children_index)?;
+
+        // build right child
+        let right_index = self
+            .tree
+            .add_right_node(index, BinaryTreeNode::new(DTNode::new()));
+        let right_children_index = tree_data.right_children[idx];
+        self.add_node_from_xgboost_json(
+            right_index,
+            tree_data,
+            right_children_index,
+        )?;
+
         Ok(())
     }
 

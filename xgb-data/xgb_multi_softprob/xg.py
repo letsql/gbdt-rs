@@ -26,12 +26,12 @@ def train():
     )
     print("%.3fs taken for training" % (time.time() - t0))
     print("Saving model...")
-    model.save_model("xgb.model")
+    model.save_model("xgb.json")
 
 def predict():
     t0 = time.time()
     model = xgb.Booster()
-    model.load_model("xgb.model")
+    model.load_model("xgb.json")
     t1 = time.time()
     print("%.3fs taken for load_model" % (t1 - t0))
 
