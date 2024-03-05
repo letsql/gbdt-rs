@@ -1,6 +1,6 @@
 extern crate gbdt;
 
-use gbdt::decision_tree::{PredVec, ValueType};
+use gbdt::decision_tree::{Data, PredVec, ValueType};
 use gbdt::gradient_boost::GBDT;
 use gbdt::input;
 use std::fs::File;
@@ -11,8 +11,8 @@ fn main() {
     // Call this command to convert xgboost model:
     // python examples/convert_xgboost.py xgb-data/xgb_binary_logitraw/xgb.model "binary:logitraw" xgb-data/xgb_binary_logitraw/gbdt.model
     // load model
-    let gbdt =
-        GBDT::from_xgboost_json("xgb-data/xgb_binary_logitraw/xgb.json").expect("failed to load model");
+    let gbdt = GBDT::from_xgboost_json_used_feature("xgb-data/xgb_binary_logitraw/xgb.json")
+        .expect("failed to load model");
 
     // load test data
     let test_file = "xgb-data/xgb_binary_logitraw/agaricus.txt.test";
@@ -20,10 +20,27 @@ fn main() {
     input_format.set_feature_size(126);
     input_format.set_delimeter(' ');
     let test_data = input::load(test_file, input_format).expect("failed to load test data");
+    // so given a vector how to transform it
+    // if the position is in the keys then add it
+
+    let transformed_test_data = test_data
+        .iter()
+        .map(|d| {
+            Data::new_test_data(
+                d.feature
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, &value)| gbdt.feature_mapping.contains_key(&(*index as i64)))
+                    .map(|(index, &value)| value)
+                    .collect(),
+                Some(d.label),
+            )
+        })
+        .collect();
 
     // inference
     println!("start prediction");
-    let predicted: PredVec = gbdt.predict(&test_data);
+    let predicted: PredVec = gbdt.predict(&transformed_test_data);
     assert_eq!(predicted.len(), test_data.len());
 
     // compare to xgboost prediction results

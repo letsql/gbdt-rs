@@ -1,6 +1,6 @@
 extern crate gbdt;
 
-use gbdt::decision_tree::ValueType;
+use gbdt::decision_tree::{Data, ValueType};
 use gbdt::gradient_boost::GBDT;
 use gbdt::input;
 use std::fs::File;
@@ -11,7 +11,7 @@ fn main() {
     // Call this command to convert xgboost model:
     // python examples/convert_xgboost.py xgb-data/xgb_multi_softmax/xgb.model "multi:softmax" xgb-data/xgb_multi_softmax/gbdt.model
     // load model
-    let gbdt = GBDT::from_xgboost_json("xgb-data/xgb_multi_softmax/xgb.json")
+    let gbdt = GBDT::from_xgboost_json_used_feature("xgb-data/xgb_multi_softmax/xgb.json")
         .expect("failed to load model");
 
     // load test data
@@ -20,10 +20,25 @@ fn main() {
     input_format.set_label_index(34);
     let test_data = input::load(test_file, input_format).expect("failed to load test data");
 
+    let transformed_test_data = test_data
+        .iter()
+        .map(|d| {
+            Data::new_test_data(
+                d.feature
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, &_value)| gbdt.feature_mapping.contains_key(&(*index as i64)))
+                    .map(|(_index, &value)| value)
+                    .collect(),
+                Some(d.label),
+            )
+        })
+        .collect();
+
     // inference
     println!("start prediction");
-    let (labels, _probs) = gbdt.predict_multiclass(&test_data, 6);
-    assert_eq!(labels.len(), test_data.len());
+    let (labels, _probs) = gbdt.predict_multiclass(&transformed_test_data, 6);
+    assert_eq!(labels.len(), transformed_test_data.len());
 
     // compare to xgboost prediction results
     let predict_result = "xgb-data/xgb_multi_softmax/pred.csv";

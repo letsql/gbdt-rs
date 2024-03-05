@@ -92,6 +92,7 @@
 //! // [2.0, 0.75, 0.75, 3.0]
 //! ```
 
+use std::collections::HashMap;
 use std::convert::TryInto;
 #[cfg(all(feature = "mesalock_sgx", not(target_env = "sgx")))]
 use std::prelude::v1::*;
@@ -142,7 +143,7 @@ def_value_type!(f64);
 pub struct Data {
     /// the vector of features
     pub feature: Vec<ValueType>,
-    /// the target value of the sample to be fit in one decistion tree. This value is calculated by gradient boost algorithm. If you want to use the decision tree with "SquaredError" directly, set this value with `label` value    
+    /// the target value of the sample to be fit in one decision tree. This value is calculated by gradient boost algorithm. If you want to use the decision tree with "SquaredError" directly, set this value with `label` value
     pub target: ValueType,
     /// sample's weight. Used in training.
     pub weight: ValueType,
@@ -1766,9 +1767,23 @@ impl DecisionTree {
         Ok(tree)
     }
 
-    pub fn get_from_xgboost_json(json_tree: &Value) -> Result<Self> {
+    pub fn get_from_xgboost_json(
+        json_tree: &Value,
+        feature_mapping: Option<&HashMap<i64, i64>>,
+    ) -> Result<Self> {
         let mut tree = DecisionTree::new();
         let index = tree.tree.add_root(BinaryTreeNode::new(DTNode::new()));
+        let indices: Vec<i64> = json_tree["split_indices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_i64().unwrap())
+            .collect();
+
+        let split_indices: Vec<i64> = match feature_mapping {
+            Some(table) => indices.iter().map(|i| *table.get(i).unwrap()).collect(),
+            None => indices.clone(),
+        };
 
         let xgb_dt = XGBDecisionTree {
             split_conditions: json_tree["split_conditions"]
@@ -1777,12 +1792,7 @@ impl DecisionTree {
                 .iter()
                 .map(|v| v.as_f64().unwrap())
                 .collect(),
-            split_indices: json_tree["split_indices"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|v| v.as_i64().unwrap())
-                .collect(),
+            split_indices,
             right_children: json_tree["right_children"]
                 .as_array()
                 .unwrap()
@@ -1812,7 +1822,6 @@ impl DecisionTree {
         tree.add_node_from_xgboost_json(index, &xgb_dt, 0)?;
         Ok(tree)
     }
-
 
     /// Recursively build the tree node from the JSON value.
     fn add_node_from_json(&mut self, index: TreeIndex, node: &Value) -> Result<()> {
@@ -1903,7 +1912,7 @@ impl DecisionTree {
         tree_data: &XGBDecisionTree,
         i: i64,
     ) -> Result<()> {
-        let idx : usize = i.try_into().unwrap();
+        let idx: usize = i.try_into().unwrap();
         let split_condition = tree_data.split_conditions[idx];
         let split_index = tree_data.split_indices[idx];
         let default_left = tree_data.default_left[idx];
@@ -1941,11 +1950,7 @@ impl DecisionTree {
             .tree
             .add_right_node(index, BinaryTreeNode::new(DTNode::new()));
         let right_children_index = tree_data.right_children[idx];
-        self.add_node_from_xgboost_json(
-            right_index,
-            tree_data,
-            right_children_index,
-        )?;
+        self.add_node_from_xgboost_json(right_index, tree_data, right_children_index)?;
 
         Ok(())
     }
