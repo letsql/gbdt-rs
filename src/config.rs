@@ -140,6 +140,7 @@ pub fn string2loss(s: &str) -> Loss {
         "multi:softprob" => Loss::MultiSoftprob,
         "multi:softmax" => Loss::MultiSoftmax,
         "rank:pairwise" => Loss::RankPairwise,
+        "reg:squarederror" => Loss::SquaredError,
         _ => {
             println!("unsupported loss, set to default(SquaredError)");
             Loss::SquaredError
