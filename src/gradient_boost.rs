@@ -845,7 +845,7 @@ impl GBDT {
         let base_score = data["learner"]["learner_model_param"]["base_score"]
             .as_str()
             .unwrap()
-            .parse::<f64>()
+            .parse::<f32>()
             .unwrap();
 
         let trees = data["learner"]["gradient_booster"]["model"]["trees"]
@@ -875,7 +875,7 @@ impl GBDT {
         let base_score = data["learner"]["learner_model_param"]["base_score"]
             .as_str()
             .unwrap()
-            .parse::<f64>()
+            .parse::<f32>()
             .unwrap();
 
         let trees = data["learner"]["gradient_booster"]["model"]["trees"]

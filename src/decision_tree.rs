@@ -123,8 +123,8 @@ macro_rules! def_value_type {
     };
 }
 
-// use continous variables for decision tree
-def_value_type!(f64);
+// use continuous variables for decision tree
+def_value_type!(f32);
 
 /// A training sample or a test sample. You can call `new_training_data` to generate a training sample, and call `new_test_data` to generate a test sample.
 ///
